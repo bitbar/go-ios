@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"os/signal"
@@ -13,9 +14,14 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/danielpaulus/go-ios/ios/debugproxy"
+	"github.com/danielpaulus/go-ios/ios/deviceinfo"
+	"github.com/danielpaulus/go-ios/ios/tunnel"
 
 	"github.com/danielpaulus/go-ios/ios/amfi"
 	"github.com/danielpaulus/go-ios/ios/mobileactivation"
@@ -33,7 +39,6 @@ import (
 
 	"github.com/danielpaulus/go-ios/ios"
 	"github.com/danielpaulus/go-ios/ios/accessibility"
-	"github.com/danielpaulus/go-ios/ios/debugproxy"
 	"github.com/danielpaulus/go-ios/ios/diagnostics"
 	"github.com/danielpaulus/go-ios/ios/forward"
 	"github.com/danielpaulus/go-ios/ios/installationproxy"
@@ -67,7 +72,7 @@ Usage:
   ios activate [options]
   ios listen [options]
   ios list [options] [--details]
-  ios info [options]
+  ios info [display | lockdown] [options]
   ios image list [options]
   ios image mount [--path=<imagepath>] [options]
   ios image auto [--basedir=<where_dev_images_are_stored>] [options]
@@ -98,7 +103,7 @@ Usage:
   ios ps [--apps] [options]
   ios ip [options]
   ios forward [options] <hostPort> <targetPort>
-  ios dproxy [--binary]
+  ios dproxy [--binary] [--mode=<all(default)|usbmuxd|utun>] [--iface=<iface>] [options]
   ios readpair [options]
   ios pcap [options] [--pid=<processID>] [--process=<processName>]
   ios install --path=<ipaOrAppFolder> [options]
@@ -106,7 +111,7 @@ Usage:
   ios apps [--system] [--all] [--list] [--filesharing] [options]
   ios launch <bundleID> [--wait] [options]
   ios kill (<bundleID> | --pid=<processID> | --process=<processName>) [options]
-  ios runtest [--bundle-id=<bundleid>] [--test-runner-bundle-id=<testrunnerbundleid>] [--xctest-config=<xctestconfig>] [--env=<e>]... [options]
+  ios runtest [--bundle-id=<bundleid>] [--test-runner-bundle-id=<testrunnerbundleid>] [--xctest-config=<xctestconfig>] [--log-output=<file>] [--test-to-run=<tests>]... [--test-to-skip=<tests>]... [--env=<e>]... [options]
   ios runwda [--bundleid=<bundleid>] [--testrunnerbundleid=<testbundleid>] [--xctestconfig=<xctestconfig>] [--arg=<a>]... [--env=<e>]... [options]
   ios ax [options]
   ios debug [options] [--stop-at-entry] <app_path>
@@ -123,15 +128,23 @@ Usage:
   ios zoomtouch (enable | disable | toggle | get) [--force] [options]
   ios diskspace [options]
   ios batterycheck [options]
+  ios tunnel start [options] [--pair-record-path=<pairrecordpath>]
+  ios tunnel ls [options]
   ios devmode (enable | get) [--enable-post-restart] [options]
 
 Options:
-  -v --verbose   Enable Debug Logging.
-  -t --trace     Enable Trace Logging (dump every message).
-  --nojson       Disable JSON output
-  --pretty       Pretty-print JSON command output
-  -h --help      Show this screen.
-  --udid=<udid>  UDID of the device.
+  -v --verbose              Enable Debug Logging.
+  -t --trace                Enable Trace Logging (dump every message).
+  --nojson                  Disable JSON output
+  --pretty                  Pretty-print JSON command output
+  -h --help                 Show this screen.
+  --udid=<udid>             UDID of the device.
+  --tunnel-info-port=<port> When go-ios is used to manage tunnels for iOS 17+ it exposes them on an HTTP-API for localhost (default port: 28100)
+  --address=<ipv6addrr>     Address of the device on the interface. This parameter is optional and can be set if a tunnel created by MacOS needs to be used.
+  >                         To get this value run "log stream --debug --info --predicate 'eventMessage LIKE "*Tunnel established*" OR eventMessage LIKE "*for server port*"'",
+  >                         connect a device and open Xcode
+  --rsd-port=<port>         Port of remote service discovery on the device through the tunnel
+  >                         This parameter is similar to '--address' and can be obtained by the same log filter
 
 The commands work as following:
 	The default output of all commands is JSON. Should you prefer human readable outout, specify the --nojson option with your command.
@@ -141,10 +154,10 @@ The commands work as following:
    ios activate [options]                                             Activate a device
    ios listen [options]                                               Keeps a persistent connection open and notifies about newly connected or disconnected devices.
    ios list [options] [--details]                                     Prints a list of all connected device's udids. If --details is specified, it includes version, name and model of each device.
-   ios info [options]                                                 Prints a dump of Lockdown getValues.
+   ios info [display | lockdown] [options]                            Prints a dump of device information from the given source.
    ios image list [options]                                           List currently mounted developers images' signatures
    ios image mount [--path=<imagepath>] [options]                     Mount a image from <imagepath>
-   >                                                                  For iOS 17+ (personalized developer disk images) <imagepath> must point to the "Restore" directory inside the developer disk 
+   >                                                                  For iOS 17+ (personalized developer disk images) <imagepath> must point to the "Restore" directory inside the developer disk
    ios image auto [--basedir=<where_dev_images_are_stored>] [options] Automatically download correct dev image from the internets and mount it.
    >                                                                  You can specify a dir where images should be cached.
    >                                                                  The default is the current dir.
@@ -193,7 +206,7 @@ The commands work as following:
    >                                                                  If you wanna speed it up, open apple maps or similar to force network traffic.
    >                                                                  f.ex. "ios launch com.apple.Maps"
    ios forward [options] <hostPort> <targetPort>                      Similar to iproxy, forward a TCP connection to the device.
-   ios dproxy [--binary]                                              Starts the reverse engineering proxy server.
+   ios dproxy [--binary] [--mode=<all(default)|usbmuxd|utun>] [--iface=<iface>] [options] Starts the reverse engineering proxy server.
    >                                                                  It dumps every communication in plain text so it can be implemented easily.
    >                                                                  Use "sudo launchctl unload -w /Library/Apple/System/Library/LaunchDaemons/com.apple.usbmuxd.plist"
    >                                                                  to stop usbmuxd and load to start it again should the proxy mess up things.
@@ -204,7 +217,10 @@ The commands work as following:
    ios apps [--system] [--all] [--list] [--filesharing]               Retrieves a list of installed applications. --system prints out preinstalled system apps. --all prints all apps, including system, user, and hidden apps. --list only prints bundle ID, bundle name and version number. --filesharing only prints apps which enable documents sharing.
    ios launch <bundleID> [--wait]                                     Launch app with the bundleID on the device. Get your bundle ID from the apps command. --wait keeps the connection open if you want logs.
    ios kill (<bundleID> | --pid=<processID> | --process=<processName>) [options] Kill app with the specified bundleID, process id, or process name on the device.
-   ios runtest [--bundle-id=<bundleid>] [--test-runner-bundle-id=<testbundleid>] [--xctest-config=<xctestconfig>] [--env=<e>]... [options]                    Run a XCUITest. If you provide only bundle-id go-ios will try to dynamically create test-runner-bundle-id and xctest-config.
+   ios runtest [--bundle-id=<bundleid>] [--test-runner-bundle-id=<testbundleid>] [--xctest-config=<xctestconfig>] [--log-output=<file>] [--test-to-run=<tests>]... [--test-to-skip=<tests>]... [--env=<e>]... [options]                    Run a XCUITest. If you provide only bundle-id go-ios will try to dynamically create test-runner-bundle-id and xctest-config.
+   >                                                                  If you provide '-' as log output, it prints resuts to stdout.
+   >                                                                  To be able to filter for tests to run or skip, use one argument per test selector. Example: runtest --test-to-run=(TestTarget.)TestClass/testMethod --test-to-run=(TestTarget.)TestClass/testMethod (the value for 'TestTarget' is optional)
+   >                                                                  The method name can also be omitted and in this case all tests of the specified class are run
    ios runwda [--bundleid=<bundleid>] [--testrunnerbundleid=<testbundleid>] [--xctestconfig=<xctestconfig>] [--arg=<a>]... [--env=<e>]...[options]  runs WebDriverAgents
    >                                                                  specify runtime args and env vars like --env ENV_1=something --env ENV_2=else  and --arg ARG1 --arg ARG2
    ios ax [options]                                                   Access accessibility inspector features.
@@ -223,6 +239,11 @@ The commands work as following:
    ios timeformat (24h | 12h | toggle | get) [--force] [options] Sets, or returns the state of the "time format". iOS 11+ only (Use --force to try on older versions).
    ios diskspace [options]											  Prints disk space info.
    ios batterycheck [options]                                         Prints battery info.
+   ios tunnel start [options] [--pair-record-path=<pairrecordpath>]   Creates a tunnel connection to the device. If the device was not paired with the host yet, device pairing will also be executed.
+   >           														  On systems with System Integrity Protection enabled the argument '--pair-record-path' is required as we can not access the default path for the pair record
+   >                                                                  This command needs to be executed with admin privileges.
+   >                                                                  (On MacOS the process 'remoted' must be paused before starting a tunnel is possible 'sudo pkill -SIGSTOP remoted', and 'sudo pkill -SIGCONT remoted' to resume)
+   ios tunnel ls                                                      List currently started tunnels
    ios devmode (enable | get) [--enable-post-restart] [options]	  Enable developer mode on the device or check if it is enabled. Can also completely finalize developer mode setup after device is restarted.
 
   `, version)
@@ -282,9 +303,32 @@ The commands work as following:
 		return
 	}
 
+	tunnelInfoPort, err := arguments.Int("--tunnel-info-port")
+	if err != nil {
+		tunnelInfoPort = tunnel.DefaultHttpApiPort
+	}
+
+	tunnelCommand, _ := arguments.Bool("tunnel")
+
 	udid, _ := arguments.String("--udid")
+	address, addressErr := arguments.String("--address")
+	rsdPort, rsdErr := arguments.Int("--rsd-port")
+
 	device, err := ios.GetDevice(udid)
-	exitIfError("error getting devicelist", err)
+	// device address and rsd port are only available after the tunnel started
+	if !tunnelCommand {
+		exitIfError("Device not found: "+udid, err)
+		if addressErr == nil && rsdErr == nil {
+			device = deviceWithRsdProvider(device, udid, address, rsdPort)
+		} else {
+			info, err := tunnel.TunnelInfoForDevice(device.Properties.SerialNumber, tunnelInfoPort)
+			if err == nil {
+				device = deviceWithRsdProvider(device, udid, info.Address, info.RsdPort)
+			} else {
+				log.WithField("udid", device.Properties.SerialNumber).Warn("failed to get tunnel info")
+			}
+		}
+	}
 
 	b, _ = arguments.Bool("erase")
 	if b {
@@ -516,7 +560,22 @@ The commands work as following:
 
 	b, _ = arguments.Bool("info")
 	if b {
-		printDeviceInfo(device)
+		if display, _ := arguments.Bool("display"); display {
+			deviceInfo, err := deviceinfo.NewDeviceInfo(device)
+			exitIfError("Can't connect to deviceinfo service", err)
+			defer deviceInfo.Close()
+
+			info, err := deviceInfo.GetDisplayInfo()
+			exitIfError("Can't fetch dispaly info", err)
+
+			fmt.Println(convertToJSONString(info))
+		} else if lockdown, _ := arguments.Bool("lockdown"); lockdown {
+			printDeviceInfo(device)
+		} else {
+			// When subcommand is missing, it defaults to lockdown.
+			// Unknown subcommands don't reach this line and quit early.
+			printDeviceInfo(device)
+		}
 		return
 	}
 
@@ -547,6 +606,15 @@ The commands work as following:
 	if b {
 		lat, _ := arguments.String("--lat")
 		lon, _ := arguments.String("--lon")
+
+		if device.SupportsRsd() {
+			server, err := instruments.NewLocationSimulationService(device)
+			exitIfError("failed to create location simulation service:", err)
+
+			startLocationSimulation(server, lat, lon)
+			return
+		}
+
 		setLocation(device, lat, lon)
 		return
 	}
@@ -786,10 +854,42 @@ The commands work as following:
 		testRunnerBundleId, _ := arguments.String("--test-runner-bundle-id")
 		xctestConfig, _ := arguments.String("--xctest-config")
 
+		testsToRunArg := arguments["--test-to-run"]
+		var testsToRun []string
+		if testsToRunArg != nil && len(testsToRunArg.([]string)) > 0 {
+			testsToRun = testsToRunArg.([]string)
+		}
+
+		testsToSkipArg := arguments["--test-to-skip"]
+		var testsToSkip []string
+		testsToSkip = nil
+		if testsToSkipArg != nil && len(testsToSkipArg.([]string)) > 0 {
+			testsToSkip = testsToSkipArg.([]string)
+		}
+
+		rawTestlog, rawTestlogErr := arguments.String("--log-output")
 		env := arguments["--env"].([]string)
-		err := testmanagerd.RunXCUITest(bundleID, testRunnerBundleId, xctestConfig, device, env)
-		if err != nil {
-			log.WithFields(log.Fields{"error": err}).Info("Failed running Xcuitest")
+
+		if rawTestlogErr == nil {
+			var writer *os.File = os.Stdout
+			if rawTestlog != "-" {
+				file, err := os.Create(rawTestlog)
+				exitIfError("Cannot open file "+rawTestlog, err)
+				writer = file
+			}
+			defer writer.Close()
+
+			testResults, err := testmanagerd.RunXCUITest(bundleID, testRunnerBundleId, xctestConfig, device, env, testsToRun, testsToSkip, testmanagerd.NewTestListener(writer, writer, os.TempDir()))
+			if err != nil {
+				log.WithFields(log.Fields{"error": err}).Info("Failed running Xcuitest")
+			}
+
+			log.Info(fmt.Printf("%+v", testResults))
+		} else {
+			_, err := testmanagerd.RunXCUITest(bundleID, testRunnerBundleId, xctestConfig, device, env, testsToRun, testsToSkip, testmanagerd.NewTestListener(io.Discard, io.Discard, os.TempDir()))
+			if err != nil {
+				log.WithFields(log.Fields{"error": err}).Info("Failed running Xcuitest")
+			}
 		}
 		return
 	}
@@ -906,6 +1006,26 @@ The commands work as following:
 		return
 	}
 
+	if tunnelCommand {
+		startCommand, _ := arguments.Bool("start")
+		listCommand, _ := arguments.Bool("ls")
+		if startCommand {
+			pairRecordsPath, _ := arguments.String("--pair-record-path")
+			if len(pairRecordsPath) == 0 {
+				pairRecordsPath = "/var/db/lockdown/RemotePairing/user_501"
+			}
+			startTunnel(context.TODO(), pairRecordsPath, tunnelInfoPort)
+		} else if listCommand {
+			tunnels, err := tunnel.ListRunningTunnels(tunnelInfoPort)
+			if err != nil {
+				exitIfError("failed to get tunnel infos", err)
+			}
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(tunnels)
+		}
+	}
+
 	b, _ = arguments.Bool("devmode")
 	if b {
 		enable, _ := arguments.Bool("enable")
@@ -1002,21 +1122,31 @@ func runWdaCommand(device ios.DeviceEntry, arguments docopt.Opts) bool {
 			return true
 		}
 		log.WithFields(log.Fields{"bundleid": bundleID, "testbundleid": testbundleID, "xctestconfig": xctestconfig}).Info("Running wda")
+
+		errorChannel := make(chan error)
+		defer close(errorChannel)
+		ctx, stopWda := context.WithCancel(context.Background())
 		go func() {
-			err := testmanagerd.RunXCUIWithBundleIdsCtx(context.Background(), bundleID, testbundleID, xctestconfig, device, wdaargs, wdaenv)
+			_, err := testmanagerd.RunXCUIWithBundleIdsCtx(ctx, bundleID, testbundleID, xctestconfig, device, wdaargs, wdaenv, nil, nil, testmanagerd.NewTestListener(io.Discard, io.Discard, os.TempDir()))
 			if err != nil {
-				log.WithFields(log.Fields{"error": err}).Fatal("Failed running WDA")
+				errorChannel <- err
 			}
+			stopWda()
 		}()
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
-		signal := <-c
-		log.Infof("os signal:%d received, closing..", signal)
 
-		err := testmanagerd.CloseXCUITestRunner()
-		if err != nil {
-			log.Error("Failed closing wda-testrunner")
+		select {
+		case err := <-errorChannel:
+			log.WithError(err).Error("Failed running WDA")
+			stopWda()
 			os.Exit(1)
+		case <-ctx.Done():
+			log.Error("WDA process ended unexpectedly")
+			os.Exit(1)
+		case signal := <-c:
+			log.Infof("os signal:%d received, closing...", signal)
+			stopWda()
 		}
 		log.Info("Done Closing")
 	}
@@ -1481,11 +1611,19 @@ func handleProfileList(device ios.DeviceEntry) {
 }
 
 func startForwarding(device ios.DeviceEntry, hostPort int, targetPort int) {
-	err := forward.Forward(device, uint16(hostPort), uint16(targetPort))
+	cl, err := forward.Forward(device, uint16(hostPort), uint16(targetPort))
 	exitIfError("failed to forward port", err)
+	defer stopForwarding(cl)
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
 	<-c
+}
+
+func stopForwarding(cl *forward.ConnListener) {
+	err := cl.Close()
+	if err != nil {
+		exitIfError("failed to close forwarded port", err)
+	}
 }
 
 func printDiagnostics(device ios.DeviceEntry) {
@@ -1602,6 +1740,29 @@ func setLocation(device ios.DeviceEntry, lat string, lon string) {
 func setLocationGPX(device ios.DeviceEntry, gpxFilePath string) {
 	err := simlocation.SetLocationGPX(device, gpxFilePath)
 	exitIfError("Setting location failed with", err)
+}
+
+func startLocationSimulation(service *instruments.LocationSimulationService, lat string, lon string) {
+	latitude, err := strconv.ParseFloat(lat, 64)
+	exitIfError("location simulation failed to parse lat", err)
+
+	longitude, err := strconv.ParseFloat(lon, 64)
+	exitIfError("location simulation failed to parse lon", err)
+
+	err = service.StartSimulateLocation(latitude, longitude)
+	exitIfError("location simulation failed to start with", err)
+
+	defer stopLocationSimulation(service)
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+	<-c
+}
+
+func stopLocationSimulation(service *instruments.LocationSimulationService) {
+	err := service.StopSimulateLocation()
+	if err != nil {
+		exitIfError("location simulation failed to stop with", err)
+	}
 }
 
 func resetLocation(device ios.DeviceEntry) {
@@ -1826,6 +1987,48 @@ func pairDevice(device ios.DeviceEntry, orgIdentityP12File string, p12Password s
 	err = ios.PairSupervised(device, p12, p12Password)
 	exitIfError("Pairing failed", err)
 	log.Infof("Successfully paired %s", device.Properties.SerialNumber)
+}
+
+func startTunnel(ctx context.Context, recordsPath string, tunnelInfoPort int) {
+	pm, err := tunnel.NewPairRecordManager(recordsPath)
+	exitIfError("could not creat pair record manager", err)
+	tm := tunnel.NewTunnelManager(pm)
+
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				err := tm.UpdateTunnels(ctx)
+				if err != nil {
+					log.WithError(err).Warn("failed to update tunnels")
+				}
+			}
+		}
+	}()
+
+	go func() {
+		err := tunnel.ServeTunnelInfo(tm, tunnelInfoPort)
+		if err != nil {
+			exitIfError("failed to start tunnel server", err)
+		}
+	}()
+
+	<-ctx.Done()
+}
+
+func deviceWithRsdProvider(device ios.DeviceEntry, udid string, address string, rsdPort int) ios.DeviceEntry {
+	rsdService, err := ios.NewWithAddrPort(address, rsdPort)
+	exitIfError("could not connect to RSD", err)
+	defer rsdService.Close()
+	rsdProvider, err := rsdService.Handshake()
+	device, err = ios.GetDeviceWithAddress(udid, address, rsdProvider)
+	exitIfError("error getting devicelist", err)
+
+	return device
 }
 
 func readPair(device ios.DeviceEntry) {

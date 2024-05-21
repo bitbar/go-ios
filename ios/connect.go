@@ -2,6 +2,12 @@ package ios
 
 import (
 	"fmt"
+	"net"
+	"time"
+
+	"github.com/danielpaulus/go-ios/ios/http"
+
+	"github.com/danielpaulus/go-ios/ios/xpc"
 )
 
 type connectMessage struct {
@@ -77,7 +83,6 @@ func (muxConn *UsbMuxConnection) ConnectLockdown(deviceID int) (*LockDownConnect
 	return nil, fmt.Errorf("Failed connecting to Lockdown with error code:%d", response.Number)
 }
 
-// ConnectToService connects to a service on the phone and returns the ready to use DeviceConnectionInterface
 func ConnectToService(device DeviceEntry, serviceName string) (DeviceConnectionInterface, error) {
 	startServiceResponse, err := StartService(device, serviceName)
 	if err != nil {
@@ -97,6 +102,140 @@ func ConnectToService(device DeviceEntry, serviceName string) (DeviceConnectionI
 		return nil, err
 	}
 	return muxConn.ReleaseDeviceConnection(), nil
+}
+
+// ConnectToShimService opens a new connection of the tunnel interface of the provided device
+// to the provided service.
+// The 'RSDCheckin' required by shim services is also executed before returning the connection to the caller
+func ConnectToShimService(device DeviceEntry, service string) (DeviceConnectionInterface, error) {
+	if device.Rsd == nil {
+		return nil, fmt.Errorf("ConnectToShimService: Cannot connect to %s, missing tunnel address and RSD port.  To start the tunnel, run `ios tunnel start`", service)
+	}
+
+	port := device.Rsd.GetPort(service)
+	conn, err := ConnectToTunnel(device, port)
+	if err != nil {
+		return nil, err
+	}
+	err = RsdCheckin(conn)
+	if err != nil {
+		return nil, err
+	}
+	return NewDeviceConnectionWithConn(conn), nil
+}
+
+// ConnectToServiceTunnelIface connects to a service on an iOS17+ device using a XPC over HTTP2 connection
+// It returns a new xpc.Connection
+func ConnectToXpcServiceTunnelIface(device DeviceEntry, serviceName string) (*xpc.Connection, error) {
+	if device.Rsd == nil {
+		return nil, fmt.Errorf("ConnectToXpcServiceTunnelIface: Cannot connect to %s, missing tunnel address and RSD port. To start the tunnel, run `ios tunnel start`", serviceName)
+	}
+	port := device.Rsd.GetPort(serviceName)
+
+	h, err := ConnectToHttp2(device, port)
+	if err != nil {
+		return nil, fmt.Errorf("ConnectToXpcServiceTunnelIface: failed to connect to http2: %w", err)
+	}
+	return CreateXpcConnection(h)
+}
+
+func ConnectToServiceTunnelIface(device DeviceEntry, serviceName string) (DeviceConnectionInterface, error) {
+	if device.Rsd == nil {
+		return nil, fmt.Errorf("ConnectToServiceTunnelIface: Cannot connect to %s, missing tunnel address and RSD port", serviceName)
+	}
+	port := device.Rsd.GetPort(serviceName)
+
+	conn, err := ConnectToTunnel(device, port)
+	if err != nil {
+		return nil, fmt.Errorf("ConnectToServiceTunnelIface: failed to connect to tunnel: %w", err)
+	}
+
+	return NewDeviceConnectionWithConn(conn), nil
+}
+
+func ConnectToHttp2(device DeviceEntry, port int) (*http.HttpConnection, error) {
+	addr, err := net.ResolveTCPAddr("tcp6", fmt.Sprintf("[%s]:%d", device.Address, port))
+	if err != nil {
+		return nil, fmt.Errorf("ConnectToHttp2: failed to resolve address: %w", err)
+	}
+
+	conn, err := net.DialTCP("tcp", nil, addr)
+	if err != nil {
+		return nil, fmt.Errorf("ConnectToHttp2: failed to dial: %w", err)
+	}
+
+	err = conn.SetKeepAlive(true)
+	if err != nil {
+		return nil, fmt.Errorf("ConnectToHttp2: failed to set keepalive: %w", err)
+	}
+	err = conn.SetKeepAlivePeriod(1 * time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("ConnectToHttp2: failed to set keepalive period: %w", err)
+	}
+	return http.NewHttpConnection(conn)
+}
+
+// ConnectToTunnel opens a new connection to the tunnel interface of the specified device and on the specified port
+func ConnectToTunnel(device DeviceEntry, port int) (*net.TCPConn, error) {
+	addr, err := net.ResolveTCPAddr("tcp6", fmt.Sprintf("[%s]:%d", device.Address, port))
+	if err != nil {
+		return nil, fmt.Errorf("ConnectToTunnel: failed to resolve address: %w", err)
+	}
+
+	conn, err := net.DialTCP("tcp", nil, addr)
+	if err != nil {
+		return nil, fmt.Errorf("ConnectToTunnel: failed to dial: %w", err)
+	}
+
+	err = conn.SetKeepAlive(true)
+	if err != nil {
+		return nil, fmt.Errorf("ConnectToTunnel: failed to set keepalive: %w", err)
+	}
+	err = conn.SetKeepAlivePeriod(1 * time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("ConnectToTunnel: failed to set keepalive period: %w", err)
+	}
+
+	return conn, nil
+}
+
+func ConnectToHttp2WithAddr(a string, port int) (*http.HttpConnection, error) {
+	addr, err := net.ResolveTCPAddr("tcp6", fmt.Sprintf("[%s]:%d", a, port))
+	if err != nil {
+		return nil, fmt.Errorf("ConnectToHttp2WithAddr: failed to resolve address: %w", err)
+	}
+
+	conn, err := net.DialTCP("tcp", nil, addr)
+	if err != nil {
+		return nil, fmt.Errorf("ConnectToHttp2WithAddr: failed to dial: %w", err)
+	}
+
+	err = conn.SetKeepAlive(true)
+	if err != nil {
+		return nil, fmt.Errorf("ConnectToHttp2WithAddr: failed to set keepalive: %w", err)
+	}
+	err = conn.SetKeepAlivePeriod(1 * time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("ConnectToHttp2WithAddr: failed to set keepalive period: %w", err)
+	}
+	return http.NewHttpConnection(conn)
+}
+
+func CreateXpcConnection(h *http.HttpConnection) (*xpc.Connection, error) {
+	err := initializeXpcConnection(h)
+	if err != nil {
+		return nil, fmt.Errorf("CreateXpcConnection: failed to initialize xpc connection: %w", err)
+	}
+
+	clientServerChannel := http.NewStreamReadWriter(h, http.ClientServer)
+	serverClientChannel := http.NewStreamReadWriter(h, http.ServerClient)
+
+	xpcConn, err := xpc.New(clientServerChannel, serverClientChannel, h)
+	if err != nil {
+		return nil, fmt.Errorf("CreateXpcConnection: failed to create xpc connection: %w", err)
+	}
+
+	return xpcConn, nil
 }
 
 // connectWithStartServiceResponse issues a Connect Message to UsbMuxd for the given deviceID on the given port
@@ -144,4 +283,53 @@ func ConnectLockdownWithSession(device DeviceEntry) (*LockDownConnection, error)
 		return nil, fmt.Errorf("StartSession failed: %+v error: %v", resp, err)
 	}
 	return lockdownConnection, nil
+}
+
+func initializeXpcConnection(h *http.HttpConnection) error {
+	csWriter := http.NewStreamReadWriter(h, http.ClientServer)
+	ssWriter := http.NewStreamReadWriter(h, http.ServerClient)
+
+	err := xpc.EncodeMessage(csWriter, xpc.Message{
+		Flags: xpc.AlwaysSetFlag,
+		Body:  map[string]interface{}{},
+		Id:    0,
+	})
+	if err != nil {
+		return fmt.Errorf("initializeXpcConnection: failed to encode message: %w", err)
+	}
+
+	_, err = xpc.DecodeMessage(csWriter) // TODO : figure out if need to act on this frame
+	if err != nil {
+		return fmt.Errorf("initializeXpcConnection: failed to decode message: %w", err)
+	}
+
+	err = xpc.EncodeMessage(ssWriter, xpc.Message{
+		Flags: xpc.InitHandshakeFlag | xpc.AlwaysSetFlag,
+		Body:  nil,
+		Id:    0,
+	})
+	if err != nil {
+		return fmt.Errorf("initializeXpcConnection: failed to encode message 2: %w", err)
+	}
+
+	_, err = xpc.DecodeMessage(ssWriter) // TODO : figure out if need to act on this frame
+	if err != nil {
+		return fmt.Errorf("initializeXpcConnection: failed to decode message 2: %w", err)
+	}
+
+	err = xpc.EncodeMessage(csWriter, xpc.Message{
+		Flags: 0x201, // alwaysSetFlag | 0x200
+		Body:  nil,
+		Id:    0,
+	})
+	if err != nil {
+		return fmt.Errorf("initializeXpcConnection: failed to encode message 3: %w", err)
+	}
+
+	_, err = xpc.DecodeMessage(csWriter) // TODO : figure out if need to act on this frame
+	if err != nil {
+		return fmt.Errorf("initializeXpcConnection: failed to decode message 3: %w", err)
+	}
+
+	return nil
 }

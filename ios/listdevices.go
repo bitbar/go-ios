@@ -56,6 +56,8 @@ type DeviceEntry struct {
 	DeviceID    int
 	MessageType string
 	Properties  DeviceProperties
+	Address     string
+	Rsd         RsdPortProvider
 }
 
 // DeviceProperties contains important device related info like the udid which is named SerialNumber
@@ -78,6 +80,12 @@ func NewReadDevices() ReadDevicesType {
 		ClientVersionString: "go-usbmux-0.0.1",
 	}
 	return data
+}
+
+// SupportsRsd checks if the device supports RSD (Remote Service Discovery).
+// It returns true if the device has RSD capability, otherwise false.
+func (device *DeviceEntry) SupportsRsd() bool {
+	return device.Rsd != nil
 }
 
 // ListDevices returns a DeviceList containing data about all

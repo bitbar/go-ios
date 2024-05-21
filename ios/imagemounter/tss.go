@@ -2,13 +2,15 @@ package imagemounter
 
 import (
 	"bytes"
+	"crypto/tls"
 	"fmt"
-	"howett.net/plist"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"howett.net/plist"
 )
 
 // tssClient is used to talk to https://gs.apple.com/TSS for getting the personalized developer disk image signatures
@@ -58,13 +60,24 @@ func (t tssClient) getSignature(identity buildIdentity, identifiers personalizat
 		"UID_MODE": false,
 	}
 
+	for k, v := range identifiers.AdditionalIdentifiers {
+		params[k] = v
+	}
+
 	buf := bytes.NewBuffer(nil)
 	enc := plist.NewEncoderForFormat(buf, plist.XMLFormat)
 	err := enc.Encode(params)
 	if err != nil {
 		return nil, fmt.Errorf("getSignature: failed to encode request body: %w", err)
 	}
-	h := http.Client{}
+	h := http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
+		},
+		Timeout: 1 * time.Minute,
+	}
 	req, err := http.NewRequest("POST", "https://gs.apple.com/TSS/controller?action=2", buf)
 	if err != nil {
 		return nil, err
