@@ -78,16 +78,29 @@ func runXCUIWithBundleIdsXcode11Ctx(
 	}
 
 	select {
+	case <-conn.Closed():
+		log.Debug("conn closed")
+		if conn.Err() != dtx.ErrConnectionClosed {
+			log.WithError(conn.Err()).Error("conn closed unexpectedly")
+		}
+		break
+	case <-conn2.Closed():
+		log.Debug("conn2 closed")
+		if conn2.Err() != dtx.ErrConnectionClosed {
+			log.WithError(conn2.Err()).Error("conn2 closed unexpectedly")
+		}
+		break
 	case <-testListener.Done():
 		break
 	case <-ctx.Done():
-		log.Infof("Killing test runner with pid %d ...", pid)
-		err = pControl.KillProcess(pid)
-		if err != nil {
-			log.Infof("Nothing to kill, process with pid %d is already dead", pid)
-		} else {
-			log.Info("Test runner killed with success")
-		}
+		break
+	}
+	log.Infof("Killing test runner with pid %d ...", pid)
+	err = pControl.KillProcess(pid)
+	if err != nil {
+		log.Infof("Nothing to kill, process with pid %d is already dead", pid)
+	} else {
+		log.Info("Test runner killed with success")
 	}
 
 	log.Debugf("Done running test")
@@ -98,14 +111,24 @@ func runXCUIWithBundleIdsXcode11Ctx(
 func startTestRunner11(pControl *instruments.ProcessControl, xctestConfigPath string, bundleID string,
 	sessionIdentifier string, testBundlePath string, wdaargs []string, wdaenv []string,
 ) (uint64, error) {
-	args := []interface{}{}
+	args := []interface{}{
+		"-NSTreatUnknownArgumentsAsOpen", "NO", "-ApplePersistenceIgnoreState", "YES",
+	}
 	for _, arg := range wdaargs {
 		args = append(args, arg)
 	}
 	env := map[string]interface{}{
-		"XCTestBundlePath":            testBundlePath,
-		"XCTestConfigurationFilePath": xctestConfigPath,
-		"XCTestSessionIdentifier":     sessionIdentifier,
+		"CA_ASSERT_MAIN_THREAD_TRANSACTIONS": "0",
+		"CA_DEBUG_TRANSACTIONS":              "0",
+		"DYLD_INSERT_LIBRARIES":              "/Developer/usr/lib/libMainThreadChecker.dylib",
+
+		"MTC_CRASH_ON_REPORT":             "1",
+		"NSUnbufferedIO":                  "YES",
+		"OS_ACTIVITY_DT_MODE":             "YES",
+		"SQLITE_ENABLE_THREAD_ASSERTIONS": "1",
+		"XCTestBundlePath":                testBundlePath,
+		"XCTestConfigurationFilePath":     xctestConfigPath,
+		"XCTestSessionIdentifier":         sessionIdentifier,
 	}
 
 	for _, entrystring := range wdaenv {
@@ -113,7 +136,7 @@ func startTestRunner11(pControl *instruments.ProcessControl, xctestConfigPath st
 		key := entry[0]
 		value := entry[1]
 		env[key] = value
-		log.Debugf("adding extra env %s=%s", key, value)
+		log.Infof("adding extra env %s=%s", key, value)
 	}
 
 	opts := map[string]interface{}{
