@@ -58,6 +58,32 @@ var (
 	prettyJSON   = false
 )
 
+// Commands that require tunnel info
+var commandsRequiringTunnel = map[string]bool{
+	"image mount":  true,
+	"reboot":       false,
+	"batterycheck": false,
+	"devmode":      false,
+	"diskspace":    false,
+	"uninstall":    false,
+	"install":      false,
+	"apps":         false,
+	"info":         false,
+	"readpair":     false,
+	"lang":         false,
+}
+
+func requiresTunnel(arguments map[string]interface{}) bool {
+	for cmd, needsTunnel := range commandsRequiringTunnel {
+		if needsTunnel {
+			if b, _ := arguments[cmd].(bool); b {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func main() {
 	Main()
 }
@@ -315,17 +341,20 @@ The commands work as following:
 	rsdPort, rsdErr := arguments.Int("--rsd-port")
 
 	device, err := ios.GetDevice(udid)
-	// device address and rsd port are only available after the tunnel started
-	if !tunnelCommand {
-		exitIfError("Device not found: "+udid, err)
-		if addressErr == nil && rsdErr == nil {
-			device = deviceWithRsdProvider(device, udid, address, rsdPort)
-		} else {
-			info, err := tunnel.TunnelInfoForDevice(device.Properties.SerialNumber, tunnelInfoPort)
-			if err == nil {
-				device = deviceWithRsdProvider(device, udid, info.Address, info.RsdPort)
+	// Check if the command requires tunnel info
+	if requiresTunnel(arguments) {
+		// device address and rsd port are only available after the tunnel started
+		if !tunnelCommand {
+			exitIfError("Device not found: "+udid, err)
+			if addressErr == nil && rsdErr == nil {
+				device = deviceWithRsdProvider(device, udid, address, rsdPort)
 			} else {
-				log.WithField("udid", device.Properties.SerialNumber).Warn("failed to get tunnel info")
+				info, err := tunnel.TunnelInfoForDevice(device.Properties.SerialNumber, tunnelInfoPort)
+				if err == nil {
+					device = deviceWithRsdProvider(device, udid, info.Address, info.RsdPort)
+				} else {
+					log.WithField("udid", device.Properties.SerialNumber).Warn("failed to get tunnel info")
+				}
 			}
 		}
 	}
