@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/Masterminds/semver"
 	"github.com/danielpaulus/go-ios/ios"
@@ -248,12 +247,8 @@ func validateBaseDirAndLookForImage(baseDir string, imageToFind string) (string,
 // write as it downloads and not load the whole file into memory.
 // PS: Taken from golangcode.com
 func downloadFile(filepath string, url string) error {
-	c := &http.Client{
-		Timeout:   2 * time.Minute,
-		Transport: http.DefaultTransport,
-	}
 	// Get the data
-	resp, err := c.Get(url)
+	resp, err := http.Get(url)
 	if err != nil {
 		return err
 	}

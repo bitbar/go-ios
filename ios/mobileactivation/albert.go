@@ -15,8 +15,7 @@ const (
 )
 
 var netClient = &http.Client{
-	Timeout:   time.Second * 5,
-	Transport: http.DefaultTransport,
+	Timeout: time.Second * 5,
 }
 
 func sendHandshakeRequest(body io.Reader) (http.Header, io.ReadCloser, error) {
