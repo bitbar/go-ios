@@ -2,7 +2,6 @@ package testmanagerd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -396,17 +395,15 @@ func runXUITestWithBundleIdsXcode15Ctx(
 	select {
 	case <-conn1.Closed():
 		log.Debug("conn1 closed")
-		if !errors.Is(conn1.Err(), dtx.ErrConnectionClosed) {
+		if conn1.Err() != dtx.ErrConnectionClosed {
 			log.WithError(conn1.Err()).Error("conn1 closed unexpectedly")
 		}
-		testListener.FinishWithError(errors.New("lost connection to testmanagerd. the test-runner may have been killed"))
 		break
 	case <-conn2.Closed():
 		log.Debug("conn2 closed")
-		if !errors.Is(conn2.Err(), dtx.ErrConnectionClosed) {
+		if conn2.Err() != dtx.ErrConnectionClosed {
 			log.WithError(conn2.Err()).Error("conn2 closed unexpectedly")
 		}
-		testListener.FinishWithError(errors.New("lost connection to testmanagerd. the test-runner may have been killed"))
 		break
 	case <-testListener.Done():
 		break
