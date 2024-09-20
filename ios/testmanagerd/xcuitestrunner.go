@@ -219,7 +219,7 @@ const (
 
 const testBundleSuffix = "UITests.xctrunner"
 
-func RunXCUITest(bundleID string, testRunnerBundleID string, xctestConfigName string, device ios.DeviceEntry, env []string, testsToRun []string, testsToSkip []string, testListener *TestListener, isXCTest bool) ([]TestSuite, error) {
+func RunXCUITest(bundleID string, testRunnerBundleID string, xctestConfigName string, device ios.DeviceEntry, env []string, testsToRun []string, testsToSkip []string, testListener *TestListener) ([]TestSuite, error) {
 	// FIXME: this is redundant code, getting the app list twice and creating the appinfos twice
 	// just to generate the xctestConfigFileName. Should be cleaned up at some point.
 	installationProxy, err := installationproxy.New(device)
@@ -246,7 +246,7 @@ func RunXCUITest(bundleID string, testRunnerBundleID string, xctestConfigName st
 		xctestConfigName = info.bundleName + "UITests.xctest"
 	}
 
-	return RunXCUIWithBundleIdsCtx(context.TODO(), bundleID, testRunnerBundleID, xctestConfigName, device, nil, env, testsToRun, testsToSkip, testListener, isXCTest)
+	return RunXCUIWithBundleIdsCtx(context.TODO(), bundleID, testRunnerBundleID, xctestConfigName, device, nil, env, testsToRun, testsToSkip, testListener)
 }
 
 func RunXCUIWithBundleIdsCtx(
@@ -260,7 +260,6 @@ func RunXCUIWithBundleIdsCtx(
 	testsToRun []string,
 	testsToSkip []string,
 	testListener *TestListener,
-	isXCTest bool,
 ) ([]TestSuite, error) {
 	version, err := ios.GetProductVersion(device)
 	if err != nil {
@@ -269,16 +268,16 @@ func RunXCUIWithBundleIdsCtx(
 
 	if version.LessThan(ios.IOS14()) {
 		log.Debugf("iOS version: %s detected, running with ios11 support", version)
-		return runXCUIWithBundleIdsXcode11Ctx(ctx, bundleID, testRunnerBundleID, xctestConfigFileName, device, args, env, testsToRun, testsToSkip, testListener, isXCTest)
+		return runXCUIWithBundleIdsXcode11Ctx(ctx, bundleID, testRunnerBundleID, xctestConfigFileName, device, args, env, testsToRun, testsToSkip, testListener)
 	}
 
 	if version.LessThan(ios.IOS17()) {
 		log.Debugf("iOS version: %s detected, running with ios14 support", version)
-		return runXUITestWithBundleIdsXcode12Ctx(ctx, bundleID, testRunnerBundleID, xctestConfigFileName, device, args, env, testsToRun, testsToSkip, testListener, isXCTest)
+		return runXUITestWithBundleIdsXcode12Ctx(ctx, bundleID, testRunnerBundleID, xctestConfigFileName, device, args, env, testsToRun, testsToSkip, testListener)
 	}
 
 	log.Debugf("iOS version: %s detected, running with ios17 support", version)
-	return runXUITestWithBundleIdsXcode15Ctx(ctx, bundleID, testRunnerBundleID, xctestConfigFileName, device, args, env, testsToRun, testsToSkip, testListener, isXCTest)
+	return runXUITestWithBundleIdsXcode15Ctx(ctx, bundleID, testRunnerBundleID, xctestConfigFileName, device, args, env, testsToRun, testsToSkip, testListener)
 }
 
 func runXUITestWithBundleIdsXcode15Ctx(
@@ -292,7 +291,6 @@ func runXUITestWithBundleIdsXcode15Ctx(
 	testsToRun []string,
 	testsToSkip []string,
 	testListener *TestListener,
-	isXCTest bool,
 ) ([]TestSuite, error) {
 	conn1, err := dtx.NewTunnelConnection(device, testmanagerdiOS17)
 	if err != nil {
@@ -335,7 +333,7 @@ func runXUITestWithBundleIdsXcode15Ctx(
 	}
 
 	testSessionID := uuid.New()
-	testconfig := createTestConfig(info, testSessionID, xctestConfigFileName, testsToRun, testsToSkip, isXCTest)
+	testconfig := createTestConfig(info, testSessionID, xctestConfigFileName, testsToRun, testsToSkip)
 	ideDaemonProxy1 := newDtxProxyWithConfig(conn1, testconfig, testListener)
 
 	localCaps := nskeyedarchiver.XCTCapabilities{CapabilitiesDictionary: map[string]interface{}{
@@ -362,7 +360,7 @@ func runXUITestWithBundleIdsXcode15Ctx(
 	}
 	defer appserviceConn.Close()
 
-	testRunnerLaunch, err := startTestRunner17(device, appserviceConn, "", testRunnerBundleID, strings.ToUpper(testSessionID.String()), info.testApp.path+"/PlugIns/"+xctestConfigFileName, args, env, isXCTest)
+	testRunnerLaunch, err := startTestRunner17(device, appserviceConn, "", testRunnerBundleID, strings.ToUpper(testSessionID.String()), info.testApp.path+"/PlugIns/"+xctestConfigFileName, args, env)
 	if err != nil {
 		return make([]TestSuite, 0), fmt.Errorf("runXUITestWithBundleIdsXcode15Ctx: cannot start test runner: %w", err)
 	}
@@ -443,21 +441,16 @@ func killTestRunner(killer processKiller, pid int) error {
 	return nil
 }
 
-func startTestRunner17(device ios.DeviceEntry, appserviceConn *appservice.Connection, xctestConfigPath string, bundleID string, sessionIdentifier string, testBundlePath string, testArgs []string, testEnv []string, isXCTest bool) (appservice.LaunchedAppWithStdIo, error) {
+func startTestRunner17(device ios.DeviceEntry, appserviceConn *appservice.Connection, xctestConfigPath string, bundleID string, sessionIdentifier string, testBundlePath string, testArgs []string, testEnv []string) (appservice.LaunchedAppWithStdIo, error) {
 	args := []interface{}{}
 	for _, arg := range testArgs {
 		args = append(args, arg)
 	}
 
-	libraries := "/Developer/usr/lib/libMainThreadChecker.dylib"
-	if isXCTest {
-		libraries += ":/System/Developer/usr/lib/libXCTestBundleInject.dylib"
-	}
-
 	env := map[string]interface{}{
 		"CA_ASSERT_MAIN_THREAD_TRANSACTIONS": "0",
 		"CA_DEBUG_TRANSACTIONS":              "0",
-		"DYLD_INSERT_LIBRARIES":              libraries,
+		"DYLD_INSERT_LIBRARIES":              "/Developer/usr/lib/libMainThreadChecker.dylib",
 		"DYLD_FRAMEWORK_PATH":                "/System/Developer/Library/Frameworks",
 		"DYLD_LIBRARY_PATH":                  "/System/Developer/usr/lib",
 
@@ -499,7 +492,7 @@ func startTestRunner17(device ios.DeviceEntry, appserviceConn *appservice.Connec
 	return appLaunch, nil
 }
 
-func setupXcuiTest(device ios.DeviceEntry, bundleID string, testRunnerBundleID string, xctestConfigFileName string, testsToRun []string, testsToSkip []string, isXCTest bool) (uuid.UUID, string, nskeyedarchiver.XCTestConfiguration, testInfo, error) {
+func setupXcuiTest(device ios.DeviceEntry, bundleID string, testRunnerBundleID string, xctestConfigFileName string, testsToRun []string, testsToSkip []string) (uuid.UUID, string, nskeyedarchiver.XCTestConfiguration, testInfo, error) {
 	testSessionID := uuid.New()
 	installationProxy, err := installationproxy.New(device)
 	if err != nil {
@@ -537,7 +530,7 @@ func setupXcuiTest(device ios.DeviceEntry, bundleID string, testRunnerBundleID s
 		return uuid.UUID{}, "", nskeyedarchiver.XCTestConfiguration{}, testInfo{}, err
 	}
 	log.Debugf("creating test config")
-	testConfigPath, testConfig, err := createTestConfigOnDevice(testSessionID, info, houseArrestService, xctestConfigFileName, testsToRun, testsToSkip, isXCTest)
+	testConfigPath, testConfig, err := createTestConfigOnDevice(testSessionID, info, houseArrestService, xctestConfigFileName, testsToRun, testsToSkip)
 	if err != nil {
 		return uuid.UUID{}, "", nskeyedarchiver.XCTestConfiguration{}, testInfo{}, err
 	}
@@ -545,13 +538,13 @@ func setupXcuiTest(device ios.DeviceEntry, bundleID string, testRunnerBundleID s
 	return testSessionID, testConfigPath, testConfig, info, nil
 }
 
-func createTestConfigOnDevice(testSessionID uuid.UUID, info testInfo, houseArrestService *house_arrest.Connection, xctestConfigFileName string, testsToRun []string, testsToSkip []string, isXCTest bool) (string, nskeyedarchiver.XCTestConfiguration, error) {
+func createTestConfigOnDevice(testSessionID uuid.UUID, info testInfo, houseArrestService *house_arrest.Connection, xctestConfigFileName string, testsToRun []string, testsToSkip []string) (string, nskeyedarchiver.XCTestConfiguration, error) {
 	relativeXcTestConfigPath := path.Join("tmp", testSessionID.String()+".xctestconfiguration")
 	xctestConfigPath := path.Join(info.testApp.homePath, relativeXcTestConfigPath)
 
 	testBundleURL := path.Join(info.testApp.path, "PlugIns", xctestConfigFileName)
 
-	config := nskeyedarchiver.NewXCTestConfiguration(info.targetApp.bundleName, testSessionID, info.targetApp.bundleID, info.targetApp.path, testBundleURL, testsToRun, testsToSkip, isXCTest)
+	config := nskeyedarchiver.NewXCTestConfiguration(info.targetApp.bundleName, testSessionID, info.targetApp.bundleID, info.targetApp.path, testBundleURL, testsToRun, testsToSkip)
 	result, err := nskeyedarchiver.ArchiveXML(config)
 	if err != nil {
 		return "", nskeyedarchiver.XCTestConfiguration{}, err
@@ -561,13 +554,13 @@ func createTestConfigOnDevice(testSessionID uuid.UUID, info testInfo, houseArres
 	if err != nil {
 		return "", nskeyedarchiver.XCTestConfiguration{}, err
 	}
-	return xctestConfigPath, nskeyedarchiver.NewXCTestConfiguration(info.targetApp.bundleName, testSessionID, info.targetApp.bundleID, info.targetApp.path, testBundleURL, testsToRun, testsToSkip, isXCTest), nil
+	return xctestConfigPath, nskeyedarchiver.NewXCTestConfiguration(info.targetApp.bundleName, testSessionID, info.targetApp.bundleID, info.targetApp.path, testBundleURL, testsToRun, testsToSkip), nil
 }
 
-func createTestConfig(info testInfo, testSessionID uuid.UUID, xctestConfigFileName string, testsToRun []string, testsToSkip []string, isXCTest bool) nskeyedarchiver.XCTestConfiguration {
+func createTestConfig(info testInfo, testSessionID uuid.UUID, xctestConfigFileName string, testsToRun []string, testsToSkip []string) nskeyedarchiver.XCTestConfiguration {
 	// the default value for this generated by Xcode is the target name, and the same name is used for the '.xctest' bundle name per default
 	productModuleName := strings.ReplaceAll(xctestConfigFileName, ".xctest", "")
-	return nskeyedarchiver.NewXCTestConfiguration(productModuleName, testSessionID, info.targetApp.bundleID, info.targetApp.path, "PlugIns/"+xctestConfigFileName, testsToRun, testsToSkip, isXCTest)
+	return nskeyedarchiver.NewXCTestConfiguration(productModuleName, testSessionID, info.targetApp.bundleID, info.targetApp.path, "PlugIns/"+xctestConfigFileName, testsToRun, testsToSkip)
 }
 
 type testInfo struct {
