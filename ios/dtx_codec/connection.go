@@ -1,7 +1,6 @@
 package dtx
 
 import (
-	"bufio"
 	"errors"
 	"io"
 	"math"
@@ -168,7 +167,7 @@ func (dtxConn *Connection) Send(message []byte) error {
 // reader reads messages from the byte stream and dispatches them to the right channel when they are decoded.
 func reader(dtxConn *Connection) {
 	for {
-		reader := bufio.NewReader(dtxConn.deviceConnection.Reader())
+		reader := dtxConn.deviceConnection.Reader()
 		msg, err := ReadMessage(reader)
 		if err != nil {
 			defer dtxConn.close(err)
