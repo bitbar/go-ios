@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path"
@@ -294,7 +296,14 @@ The commands work as following:
 		return
 	}
 	proxyUrl, _ := arguments.String("--proxyurl")
-	exitIfError("could not parse proxy url", ios.UseHttpProxy(proxyUrl))
+	if proxyUrl == "" {
+		proxyUrl = os.Getenv("HTTP_PROXY")
+	}
+	if proxyUrl != "" {
+		parsedUrl, err := url.Parse(proxyUrl)
+		exitIfError("failed parsing proxy url", err)
+		http.DefaultTransport = &http.Transport{Proxy: http.ProxyURL(parsedUrl)}
+	}
 
 	b, _ := arguments.Bool("listen")
 	if b {
