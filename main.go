@@ -2334,7 +2334,7 @@ func startTunnel(ctx context.Context, recordsPath string, tunnelInfoPort int, us
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				err := tm.UpdateTunnels(ctx)
+				err := tm.UpdateTunnels(ctx, nil)
 				if err != nil {
 					log.WithError(err).Warn("failed to update tunnels")
 				}

@@ -270,7 +270,7 @@ func (m *TunnelManager) FirstUpdateCompleted() bool {
 
 // UpdateTunnels checks for connected devices and starts a new tunnel if needed
 // On device disconnects the tunnel resources get cleaned up
-func (m *TunnelManager) UpdateTunnels(ctx context.Context) error {
+func (m *TunnelManager) UpdateTunnels(ctx context.Context, excludedDevices map[string]struct{}) error {
 
 	m.mux.Lock()
 	localTunnels := map[string]Tunnel{}
@@ -283,6 +283,11 @@ func (m *TunnelManager) UpdateTunnels(ctx context.Context) error {
 	}
 	for _, d := range devices.DeviceList {
 		udid := d.Properties.SerialNumber
+		if excludedDevices != nil {
+			if _, excluded := excludedDevices[udid]; excluded {
+				continue
+			}
+		}
 		if _, exists := localTunnels[udid]; exists {
 			continue
 		}
