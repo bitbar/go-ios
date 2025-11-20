@@ -282,12 +282,12 @@ func (m *TunnelManager) UpdateTunnels(ctx context.Context, excludedDevices map[s
 		return fmt.Errorf("UpdateTunnels: failed to get list of devices: %w", err)
 	}
 	for _, d := range devices.DeviceList {
+		udid := d.Properties.SerialNumber
 		if excludedDevices != nil {
-			if _, excluded := excludedDevices[d.Properties.SerialNumber]; excluded {
+			if _, excluded := excludedDevices[udid]; excluded {
 				continue
 			}
 		}
-		udid := d.Properties.SerialNumber
 		if _, exists := localTunnels[udid]; exists {
 			continue
 		}
