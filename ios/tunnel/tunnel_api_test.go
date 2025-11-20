@@ -40,7 +40,7 @@ func TestSuccessStartForMultipleConnectedDevices(t *testing.T) {
 		Udid:    "serial2",
 	}, nil)
 
-	err := tm.UpdateTunnels(context.Background())
+	err := tm.UpdateTunnels(context.Background(), nil)
 	assert.NoError(t, err)
 
 	tunnels, err := tm.ListTunnels()
@@ -80,7 +80,7 @@ func TestCloseTunnelsOnDisconnect(t *testing.T) {
 		closer:  closer,
 	}, nil)
 
-	err := tm.UpdateTunnels(context.Background())
+	err := tm.UpdateTunnels(context.Background(), nil)
 	assert.NoError(t, err)
 
 	tunnels, _ := tm.ListTunnels()
@@ -90,7 +90,7 @@ func TestCloseTunnelsOnDisconnect(t *testing.T) {
 		Return(ios.DeviceList{}, nil).
 		Once()
 
-	err = tm.UpdateTunnels(context.Background())
+	err = tm.UpdateTunnels(context.Background(), nil)
 	assert.NoError(t, err)
 	tunnels, _ = tm.ListTunnels()
 	assert.Len(t, tunnels, 0)
@@ -115,9 +115,9 @@ func TestBridgeIsOnlyStarteOnce(t *testing.T) {
 		closer:  closer,
 	}, nil)
 
-	err := tm.UpdateTunnels(context.Background())
+	err := tm.UpdateTunnels(context.Background(), nil)
 	assert.NoError(t, err)
-	err = tm.UpdateTunnels(context.Background())
+	err = tm.UpdateTunnels(context.Background(), nil)
 	assert.NoError(t, err)
 
 	ts.AssertNumberOfCalls(t, "StartTunnel", 1)
