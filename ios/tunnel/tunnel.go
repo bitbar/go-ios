@@ -147,14 +147,14 @@ func connectToTunnel(ctx context.Context, info tunnelListener, addr string, devi
 	tunnelCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 
 	go func() {
-		err := forwardDataToInterface(tunnelCtx, conn, utunIface)
+		err := forwardDataToInterface(tunnelCtx, *conn, utunIface)
 		if err != nil {
 			logrus.WithError(err).Error("failed to forward data to tunnel interface")
 		}
 	}()
 
 	go func() {
-		err := forwardDataToDevice(tunnelCtx, tunnelInfo.ClientParameters.Mtu, utunIface, conn)
+		err := forwardDataToDevice(tunnelCtx, tunnelInfo.ClientParameters.Mtu, utunIface, *conn)
 		if err != nil {
 			logrus.WithError(err).Error("failed to forward data to the device")
 		}
@@ -262,7 +262,7 @@ func createTlsConfig(info tunnelListener) (*tls.Config, error) {
 	return conf, nil
 }
 
-func forwardDataToDevice(ctx context.Context, mtu uint64, r io.Reader, conn quic.Connection) error {
+func forwardDataToDevice(ctx context.Context, mtu uint64, r io.Reader, conn quic.Conn) error {
 	packet := make([]byte, mtu)
 	for {
 		select {
@@ -281,7 +281,7 @@ func forwardDataToDevice(ctx context.Context, mtu uint64, r io.Reader, conn quic
 	}
 }
 
-func forwardDataToInterface(ctx context.Context, conn quic.Connection, w io.Writer) error {
+func forwardDataToInterface(ctx context.Context, conn quic.Conn, w io.Writer) error {
 	for {
 		select {
 		case <-ctx.Done():
