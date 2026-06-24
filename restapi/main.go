@@ -4,7 +4,6 @@ import (
 	"os"
 
 	"github.com/danielpaulus/go-ios/restapi/api"
-	_ "github.com/danielpaulus/go-ios/restapi/docs"
 	log "github.com/sirupsen/logrus"
 )
 
