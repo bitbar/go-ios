@@ -14,16 +14,17 @@ import (
 	"io"
 	"math/big"
 	"os/exec"
-	"runtime"
 	"time"
 
 	"github.com/danielpaulus/go-ios/ios"
+	"github.com/danielpaulus/go-ios/ios/golog"
 	"github.com/danielpaulus/go-ios/ios/http"
 
 	"github.com/quic-go/quic-go"
 	"github.com/sirupsen/logrus"
-	"github.com/songgao/water"
 )
+
+const logModule = "go-ios/tunnel"
 
 // Tunnel describes the parameters of an established tunnel to the device
 type Tunnel struct {
@@ -48,6 +49,7 @@ func (t Tunnel) Close() error {
 // After a successful pairing a tunnel for this device gets started and the tunnel information is returned
 func ManualPairAndConnectToTunnel(ctx context.Context, device ios.DeviceEntry, p PairRecordManager) (Tunnel, error) {
 	logrus.Info("ManualPairAndConnectToTunnel: starting manual pairing and tunnel connection, dont forget to run this with sudo.")
+	golog.Info("ManualPairAndConnectToTunnel: starting manual pairing and tunnel connection, dont forget to stop remoted first with 'sudo pkill -SIGSTOP remoted' and run this with sudo.", "module", logModule, "udid", device.Properties.SerialNumber)
 	addr, err := ios.FindDeviceInterfaceAddress(ctx, device)
 	if err != nil {
 		return Tunnel{}, fmt.Errorf("ManualPairAndConnectToTunnel: failed to find device ethernet interface: %w", err)
@@ -106,7 +108,7 @@ func getUntrustedTunnelServicePort(addr string, device ios.DeviceEntry) (int, er
 }
 
 func connectToTunnel(ctx context.Context, info tunnelListener, addr string, device ios.DeviceEntry) (Tunnel, error) {
-	logrus.WithField("address", addr).WithField("port", info.TunnelPort).Info("connect to tunnel endpoint on device")
+	golog.Info("connect to tunnel endpoint on device", "module", logModule, "udid", device.Properties.SerialNumber, "address", addr, "port", info.TunnelPort)
 
 	conf, err := createTlsConfig(info)
 	if err != nil {
@@ -149,14 +151,14 @@ func connectToTunnel(ctx context.Context, info tunnelListener, addr string, devi
 	go func() {
 		err := forwardDataToInterface(tunnelCtx, *conn, utunIface)
 		if err != nil {
-			logrus.WithError(err).Error("failed to forward data to tunnel interface")
+			golog.Error("failed to forward data to tunnel interface", "module", logModule, "udid", device.Properties.SerialNumber, "error", err)
 		}
 	}()
 
 	go func() {
 		err := forwardDataToDevice(tunnelCtx, tunnelInfo.ClientParameters.Mtu, utunIface, *conn)
 		if err != nil {
-			logrus.WithError(err).Error("failed to forward data to the device")
+			golog.Error("failed to forward data to the device", "module", logModule, "udid", device.Properties.SerialNumber, "error", err)
 		}
 	}()
 
@@ -173,46 +175,6 @@ func connectToTunnel(ctx context.Context, info tunnelListener, addr string, devi
 		Udid:    device.Properties.SerialNumber,
 		closer:  closeFunc,
 	}, nil
-}
-
-func setupTunnelInterface(tunnelInfo tunnelParameters) (io.ReadWriteCloser, error) {
-	if runtime.GOOS == "windows" {
-		return setupWindowsTUN(tunnelInfo)
-	}
-	ifce, err := water.New(water.Config{
-		DeviceType: water.TUN,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("setupTunnelInterface: failed creating TUN device %w", err)
-	}
-
-	const prefixLength = 64 // TODO: this could be calculated from the netmask provided by the device
-
-	setIpAddr := exec.Command("ifconfig", ifce.Name(), "inet6", "add", fmt.Sprintf("%s/%d", tunnelInfo.ClientParameters.Address, prefixLength))
-	err = runCmd(setIpAddr)
-	if err != nil {
-		return nil, fmt.Errorf("setupTunnelInterface: failed to set IP address for interface: %w", err)
-	}
-
-	// FIXME: we need to reduce the tunnel interface MTU so that the OS takes care of splitting the payloads into
-	// smaller packets. If we use a larger number here, the QUIC tunnel won't send the packets properly
-	// This is only necessary on MacOS, on Linux we can't set the MTU to a value less than 1280 (minimum for IPv6)
-	if runtime.GOOS == "darwin" {
-		ifceMtu := 1202
-		setMtu := exec.Command("ifconfig", ifce.Name(), "mtu", fmt.Sprintf("%d", ifceMtu), "up")
-		err = runCmd(setMtu)
-		if err != nil {
-			return nil, fmt.Errorf("setupTunnelInterface: failed to configure MTU: %w", err)
-		}
-	}
-
-	enableIfce := exec.Command("ifconfig", ifce.Name(), "up")
-	err = runCmd(enableIfce)
-	if err != nil {
-		return nil, fmt.Errorf("setupTunnelInterface: failed to enable interface %s: %w", ifce.Name(), err)
-	}
-
-	return ifce, nil
 }
 
 func runCmd(cmd *exec.Cmd) error {
@@ -320,22 +282,21 @@ func exchangeCoreTunnelParameters(stream io.ReadWriteCloser) (tunnelParameters, 
 	}
 
 	header := make([]byte, len("CDTunnel")+2)
-	n, err := stream.Read(header)
-	if err != nil {
-		return tunnelParameters{}, fmt.Errorf("could not header read from stream. %w", err)
+	// Use io.ReadFull rather than a single Read: the tunnel is a byte stream and
+	// a short read would leave the length byte (and body) uninitialized/garbage.
+	if _, err := io.ReadFull(stream, header); err != nil {
+		return tunnelParameters{}, fmt.Errorf("could not read header from stream. %w", err)
 	}
 
 	bodyLen := header[len(header)-1]
 
 	res := make([]byte, bodyLen)
-	n, err = stream.Read(res)
-	if err != nil {
-		return tunnelParameters{}, fmt.Errorf("could not read from stream. %w", err)
+	if _, err := io.ReadFull(stream, res); err != nil {
+		return tunnelParameters{}, fmt.Errorf("could not read body from stream. %w", err)
 	}
 
 	var parameters tunnelParameters
-	err = json.Unmarshal(res[:n], &parameters)
-	if err != nil {
+	if err := json.Unmarshal(res, &parameters); err != nil {
 		return tunnelParameters{}, err
 	}
 	return parameters, nil

@@ -12,10 +12,10 @@ import (
 
 	"io"
 
+	"github.com/danielpaulus/go-ios/ios/golog"
 	"github.com/danielpaulus/go-ios/ios/opack"
 	"github.com/danielpaulus/go-ios/ios/xpc"
 
-	log "github.com/sirupsen/logrus"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/ed25519"
 	"golang.org/x/crypto/hkdf"
@@ -42,6 +42,11 @@ type tunnelService struct {
 	cipher         *cipherStream
 
 	pairRecords PairRecordManager
+
+	// sharedSecret is the raw X25519 ECDH shared secret from the most recent
+	// successful pair-verify. iOS 18.2+ uses it verbatim as the TLS pre-shared
+	// key for the TCP tunnel transport (see createTcpTunnelListener).
+	sharedSecret []byte
 }
 
 func (t *tunnelService) Close() error {
@@ -77,7 +82,7 @@ func (t *tunnelService) ManualPair() error {
 	if err == nil {
 		return nil
 	}
-	log.WithError(err).Info("pair verify failed")
+	golog.Info("pair verify failed", "module", logModule, "error", err)
 
 	err = t.setupManualPairing()
 	if err != nil {
@@ -108,7 +113,7 @@ func (t *tunnelService) ManualPair() error {
 }
 
 func (t *tunnelService) createTunnelListener() (tunnelListener, error) {
-	log.Info("create tunnel listener")
+	golog.Info("create tunnel listener", "module", logModule)
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 
 	if err != nil {
@@ -165,6 +170,48 @@ func (t *tunnelService) createTunnelListener() (tunnelListener, error) {
 		DevicePublicKey: publicKey,
 		TunnelPort:      uint64(port),
 	}, nil
+}
+
+// createTcpTunnelListener asks the device to open a TCP tunnel listener (the
+// transport used since iOS 18.2, which removed QUIC). Unlike the QUIC listener,
+// the device authenticates the TLS connection with a pre-shared key: we send the
+// raw pair-verify shared secret as the createListener key, and the device
+// replies with just a port to dial. The same secret is used as the TLS PSK.
+func (t *tunnelService) createTcpTunnelListener() (uint16, error) {
+	golog.Info("create tcp tunnel listener", "module", logModule)
+	if len(t.sharedSecret) == 0 {
+		return 0, fmt.Errorf("createTcpTunnelListener: no pair-verify shared secret available (TLS-PSK tunnel requires a verified pairing)")
+	}
+
+	err := t.cipher.write(map[string]interface{}{
+		"request": map[string]interface{}{
+			"_0": map[string]interface{}{
+				"createListener": map[string]interface{}{
+					"key":                   t.sharedSecret,
+					"transportProtocolType": "tcp",
+				},
+			},
+		},
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	var listenerRes map[string]interface{}
+	err = t.cipher.read(&listenerRes)
+	if err != nil {
+		return 0, err
+	}
+
+	createListener, err := getChildMap(listenerRes, "response", "_1", "createListener")
+	if err != nil {
+		return 0, err
+	}
+	port, ok := createListener["port"].(float64)
+	if !ok {
+		return 0, fmt.Errorf("createTcpTunnelListener: no port in createListener response")
+	}
+	return uint16(port), nil
 }
 
 func (t *tunnelService) setupCiphers(sessionKey []byte) error {
@@ -292,6 +339,9 @@ func (t *tunnelService) verifyPair() error {
 	if err != nil {
 		return err
 	}
+	// Retain the raw shared secret; the TLS-PSK TCP tunnel (iOS 18.2+) uses it
+	// directly as the pre-shared key.
+	t.sharedSecret = sharedSecret
 
 	derived := make([]byte, 32)
 	_, err = hkdf.New(sha512.New, sharedSecret, []byte("Pair-Verify-Encrypt-Salt"), []byte("Pair-Verify-Encrypt-Info")).Read(derived)
@@ -346,7 +396,7 @@ func (t *tunnelService) verifyPair() error {
 		return err
 	}
 	if len(errRes) > 0 {
-		log.Debug("send pair verify failed event")
+		golog.Debug("send pair verify failed event", "module", logModule)
 		err := t.controlChannel.writeEvent(pairVerifyFailed{})
 		if err != nil {
 			return err
