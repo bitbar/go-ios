@@ -73,7 +73,7 @@ func TestShouldSkipDevice(t *testing.T) {
 // failure) and creating no tunnel.
 func TestUpdateTunnelsSkipsNetworkDevices(t *testing.T) {
 	tm := leakTestManager(devEntry("net-1", "Network"))
-	if err := tm.UpdateTunnels(context.Background()); err != nil {
+	if err := tm.UpdateTunnels(context.Background(), nil); err != nil {
 		t.Fatalf("UpdateTunnels: %v", err)
 	}
 	if len(tm.failedDevices) != 0 {
@@ -91,7 +91,7 @@ func TestUpdateTunnelsRespectsBackoff(t *testing.T) {
 	tm := leakTestManager(devEntry("usb-1", "USB"))
 	seeded := time.Now()
 	tm.failedDevices["usb-1"] = failedDevice{lastAttempt: seeded, failCount: 5} // 5 min backoff
-	if err := tm.UpdateTunnels(context.Background()); err != nil {
+	if err := tm.UpdateTunnels(context.Background(), nil); err != nil {
 		t.Fatalf("UpdateTunnels: %v", err)
 	}
 	got, ok := tm.failedDevices["usb-1"]
@@ -108,7 +108,7 @@ func TestUpdateTunnelsRespectsBackoff(t *testing.T) {
 func TestUpdateTunnelsPrunesDisconnectedFailedDevices(t *testing.T) {
 	tm := leakTestManager(devEntry("net-1", "Network"))
 	tm.failedDevices["gone"] = failedDevice{lastAttempt: time.Now(), failCount: 2}
-	if err := tm.UpdateTunnels(context.Background()); err != nil {
+	if err := tm.UpdateTunnels(context.Background(), nil); err != nil {
 		t.Fatalf("UpdateTunnels: %v", err)
 	}
 	if _, ok := tm.failedDevices["gone"]; ok {
@@ -120,7 +120,7 @@ func TestUpdateTunnelsPrunesDisconnectedFailedDevices(t *testing.T) {
 // errors) must be recorded so the next cycle backs off instead of retrying.
 func TestUpdateTunnelsRecordsFailure(t *testing.T) {
 	tm := leakTestManager(devEntry("usb-1", "USB"))
-	if err := tm.UpdateTunnels(context.Background()); err != nil {
+	if err := tm.UpdateTunnels(context.Background(), nil); err != nil {
 		t.Fatalf("UpdateTunnels: %v", err)
 	}
 	got, ok := tm.failedDevices["usb-1"]

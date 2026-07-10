@@ -16,9 +16,8 @@ import (
 
 	"github.com/Masterminds/semver"
 	"github.com/danielpaulus/go-ios/ios"
-	"github.com/danielpaulus/go-ios/ios/remoted"
-	log "github.com/sirupsen/logrus"
 	"github.com/danielpaulus/go-ios/ios/golog"
+	"github.com/danielpaulus/go-ios/ios/remoted"
 	"golang.org/x/exp/maps"
 	"golang.org/x/exp/slices"
 )
@@ -441,6 +440,7 @@ func (m *TunnelManager) UpdateTunnels(ctx context.Context, excludedDevices map[s
 			if _, excluded := excludedDevices[udid]; excluded {
 				continue
 			}
+		}
 		if m.udidFilter != "" && udid != m.udidFilter {
 			continue
 		}

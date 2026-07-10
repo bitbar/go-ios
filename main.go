@@ -26,7 +26,6 @@ import (
 
 	"github.com/danielpaulus/go-ios/internal/clihelp"
 	"github.com/danielpaulus/go-ios/ios/debugproxy"
-	"github.com/danielpaulus/go-ios/ios/deviceinfo"
 	"github.com/danielpaulus/go-ios/ios/remoted"
 	"github.com/danielpaulus/go-ios/ios/tunnel"
 
@@ -1877,9 +1876,9 @@ func startTunnel(ctx context.Context, recordsPath string, tunnelInfoHost string,
 
 	err = remoted.ContinueRemoted()
 	if err != nil {
-		log.Errorf("failed to resume remoted: %v", err)
+		slog.Error("failed to resume remoted", "error", err)
 	} else {
-		log.Info("resumed remoted")
+		slog.Info("resumed remoted")
 	}
 }
 
@@ -1928,7 +1927,6 @@ func convertToJSONString(data interface{}) string {
 
 func exitIfError(msg string, err error) {
 	if err != nil {
-		log.WithFields(log.Fields{"err": err}).Fatalf("%s", msg)
 		logFatal(msg, "err", err)
 	}
 }

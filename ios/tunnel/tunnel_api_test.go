@@ -26,30 +26,6 @@ func TestRemoveTunnelStopsOnlyRequestedTunnel(t *testing.T) {
 			Udid:   "serial-b",
 			closer: func() error { closedB.Add(1); return nil },
 		},
-	}
-
-	dl.On("ListDevices").Return(ios.DeviceList{DeviceList: []ios.DeviceEntry{d1, d2}}, nil)
-
-	ts.On("StartTunnel", mock.Anything, d1, mock.Anything).Return(Tunnel{
-		Address: "addr1",
-		RsdPort: 1,
-		Udid:    "serial1",
-	}, nil)
-	ts.On("StartTunnel", mock.Anything, d2, mock.Anything).Return(Tunnel{
-		Address: "addr2",
-		RsdPort: 2,
-		Udid:    "serial2",
-	}, nil)
-
-	err := tm.UpdateTunnels(context.Background(), nil)
-	assert.NoError(t, err)
-
-	tunnels, err := tm.ListTunnels()
-
-	assert.Contains(t, tunnels, Tunnel{
-		Address: "addr1",
-		RsdPort: 1,
-		Udid:    "serial1",
 	})
 
 	err := tm.RemoveTunnel(context.Background(), "serial-a")
@@ -180,31 +156,6 @@ func TestRefreshTunnelForDeviceWaitsForRecreatedTunnel(t *testing.T) {
 	if tun.Address != "fd00::new" || tun.RsdPort != 4321 {
 		t.Fatalf("refreshed tunnel = %+v, want recreated tunnel", tun)
 	}
-
-	dl.On("ListDevices").
-		Return(ios.DeviceList{DeviceList: []ios.DeviceEntry{d1}}, nil).
-		Once()
-	ts.On("StartTunnel", mock.Anything, d1, mock.Anything).Return(Tunnel{
-		Address: "addr1",
-		RsdPort: 1,
-		closer:  closer,
-	}, nil)
-
-	err := tm.UpdateTunnels(context.Background(), nil)
-	assert.NoError(t, err)
-
-	tunnels, _ := tm.ListTunnels()
-	assert.Len(t, tunnels, 1)
-
-	dl.On("ListDevices").
-		Return(ios.DeviceList{}, nil).
-		Once()
-
-	err = tm.UpdateTunnels(context.Background(), nil)
-	assert.NoError(t, err)
-	tunnels, _ = tm.ListTunnels()
-	assert.Len(t, tunnels, 0)
-	assert.GreaterOrEqual(t, closerCalls.Load(), uint64(1))
 }
 
 // TestTunnelManagerConcurrentAccess guards the TunnelManager's mutex: the
@@ -244,12 +195,6 @@ func TestTunnelManagerConcurrentAccess(t *testing.T) {
 	}
 	wg.Wait()
 
-	err := tm.UpdateTunnels(context.Background(), nil)
-	assert.NoError(t, err)
-	err = tm.UpdateTunnels(context.Background(), nil)
-	assert.NoError(t, err)
-
-	ts.AssertNumberOfCalls(t, "StartTunnel", 1)
 	// Every tunnel was removed exactly once and the map is left consistent.
 	left, err := tm.ListTunnels()
 	if err != nil {
