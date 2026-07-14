@@ -597,7 +597,7 @@ func (m manualPairingTunnelStart) StartTunnel(ctx context.Context, device ios.De
 	if version.Major() >= 17 {
 		err := remoted.StopRemoted()
 		if err != nil {
-			return Tunnel{}, fmt.Errorf("manualPairingTunnelStart: failed to stop remoted: %w", err)
+			golog.Warn("failed to stop remoted, it may already be stopped", "module", logModule, "udid", device.Properties.SerialNumber, "error", err)
 		}
 	}
 	if version.GreaterThan(semver.MustParse("17.4.0")) {
