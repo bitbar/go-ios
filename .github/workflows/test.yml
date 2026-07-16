@@ -3,13 +3,29 @@ on:
 
 name: Unit tests
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install libusb
+        run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev
+
+      - name: Run go vet
+        run: go vet ./...
+
   test_on_windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
 
       - name: Install Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -20,16 +36,16 @@ jobs:
       - name: Build executable
         run: go build
 
-      #- name: Run fast tests
-      #  run: go test -v -tags=fast ./...
+      #- name: Run unit tests
+      #  run: go test -v ./...
 
   test_on_linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
 
       - name: Install Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -42,8 +58,11 @@ jobs:
       - name: Build executable
         run: make build --trace
 
-      - name: Run fast tests
-        run: go test -v -tags=fast ./...
+      - name: Run unit tests
+        # -race so the data-race detector runs in CI (e.g. the TunnelManager
+        # mutex test). cgo is already on for libusb, so the detector is supported.
+        run: go test -race ./...
 
       - name: Verify code formatting
         run: test -z "$(gofmt -l .)"
+
